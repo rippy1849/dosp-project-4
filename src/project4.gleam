@@ -1,4 +1,5 @@
 import gleam/dict
+import gleam/erlang/process
 import gleam/io
 import gleam/list
 import gleam/option
@@ -10,7 +11,10 @@ pub type State {
     stack: List(String),
     users_db: dict.Dict(String, String),
     subreddit_user_db: dict.Dict(String, List(String)),
-    subreddit_comment_db: dict.Dict(String, List(#(String, String, String))),
+    subreddit_comment_db: dict.Dict(
+      String,
+      List(#(Int, Int, String, Int, String)),
+    ),
   )
 }
 
@@ -22,7 +26,9 @@ pub type Message {
   JoinSubReddit(String, String)
   LeaveSubReddit(String, String)
   Post(String, String, String)
-  Comment(String, String, String, String)
+  Comment(String, String, Int, String)
+  UpVote(String, Int)
+  DownVote(String, Int)
   // Push(String)
   // PopGossip(process.Subject(Result(Int, Nil)))
 }
@@ -102,12 +108,87 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
       ))
     }
     Post(subreddit_name, username, comment) -> {
+      let #(current_comment_id) = state.internal
+      let current_comment_id = current_comment_id + 1
+
       let subreddit_comment_db =
         add_comment(state.subreddit_comment_db, subreddit_name, #(
+          0,
+          current_comment_id,
           username,
-          "",
+          0,
           comment,
         ))
+
+      actor.continue(State(
+        #(current_comment_id),
+        state.stack,
+        state.users_db,
+        state.subreddit_user_db,
+        subreddit_comment_db,
+      ))
+    }
+    Comment(subreddit_name, username, parent_comment_id, comment) -> {
+      let #(current_comment_id) = state.internal
+      let current_comment_id = current_comment_id + 1
+      let subreddit_comment_db =
+        add_comment(state.subreddit_comment_db, subreddit_name, #(
+          0,
+          current_comment_id,
+          username,
+          parent_comment_id,
+          comment,
+        ))
+
+      actor.continue(State(
+        #(current_comment_id),
+        state.stack,
+        state.users_db,
+        state.subreddit_user_db,
+        subreddit_comment_db,
+      ))
+    }
+    UpVote(subreddit_name, post_comment_id) -> {
+      let result = dict.get(state.subreddit_comment_db, subreddit_name)
+
+      let comments = case result {
+        Ok(result) -> result
+        Error(_) -> []
+      }
+
+      let #(
+        updown,
+        comment_id,
+        post_username,
+        post_parent_comment_id,
+        comment_contents,
+      ) = find_comment(comments, post_comment_id)
+
+      // echo comment_id
+
+      let new_comment_list = delete_comment(comments, comment_id)
+
+      // echo new_comment_list
+
+      let updown = updown + 1
+      let updated_comment = #(
+        updown,
+        comment_id,
+        post_username,
+        post_parent_comment_id,
+        comment_contents,
+      )
+
+      let new_comment_list = list.append(new_comment_list, [updated_comment])
+
+      let subreddit_comment_db =
+        update_comment_dict(
+          state.subreddit_comment_db,
+          subreddit_name,
+          new_comment_list,
+        )
+
+      echo subreddit_comment_db
 
       actor.continue(State(
         state.internal,
@@ -117,13 +198,48 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         subreddit_comment_db,
       ))
     }
-    Comment(subreddit_name, username, parent_comment, comment) -> {
+
+    DownVote(subreddit_name, post_comment_id) -> {
+      let result = dict.get(state.subreddit_comment_db, subreddit_name)
+
+      let comments = case result {
+        Ok(result) -> result
+        Error(_) -> []
+      }
+
+      let #(
+        updown,
+        comment_id,
+        post_username,
+        post_parent_comment_id,
+        comment_contents,
+      ) = find_comment(comments, post_comment_id)
+
+      // echo comment_id
+
+      let new_comment_list = delete_comment(comments, comment_id)
+
+      // echo new_comment_list
+
+      let updown = updown - 1
+      let updated_comment = #(
+        updown,
+        comment_id,
+        post_username,
+        post_parent_comment_id,
+        comment_contents,
+      )
+
+      let new_comment_list = list.append(new_comment_list, [updated_comment])
+
       let subreddit_comment_db =
-        add_comment(state.subreddit_comment_db, subreddit_name, #(
-          username,
-          parent_comment,
-          comment,
-        ))
+        update_comment_dict(
+          state.subreddit_comment_db,
+          subreddit_name,
+          new_comment_list,
+        )
+
+      // echo subreddit_comment_db
 
       actor.continue(State(
         state.internal,
@@ -137,7 +253,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
 }
 
 pub fn main() {
-  io.println("Hello from project4!")
+  io.println("Hello from Rippy!")
 
   let users_db = dict.new()
   let subreddit_user_db = dict.new()
@@ -147,6 +263,22 @@ pub fn main() {
     actor.new(State(#(0), [], users_db, subreddit_user_db, subreddit_comment_db))
     |> actor.on_message(handle_message)
     |> actor.start
+
+  let engine_handle = engine_actor.data
+
+  process.send(engine_handle, RegisterAccount("Griz", "test"))
+  process.send(engine_handle, CreateSubReddit("Raves"))
+  process.send(engine_handle, JoinSubReddit("Lsdream", "Raves"))
+  process.send(engine_handle, Post("Raves", "Griz", "Raves are cool"))
+  process.send(engine_handle, Comment("Raves", "Lsdream", 1, "I agree"))
+
+  //Upvoting comment with id 1
+  process.send(engine_handle, UpVote("Raves", 1))
+  process.send(engine_handle, UpVote("Raves", 2))
+
+  // process.send(engine_handle, DownVote("Raves", 1))
+
+  process.sleep(1000)
 }
 
 /// Add a value to the list stored under a key,
@@ -165,14 +297,14 @@ pub fn add_to_list_in_dict(
 }
 
 pub fn add_comment(
-  d: dict.Dict(String, List(#(String, String, String))),
+  d: dict.Dict(String, List(#(Int, Int, String, Int, String))),
   key: String,
-  value: #(String, String, String),
-) -> dict.Dict(String, List(#(String, String, String))) {
+  value: #(Int, Int, String, Int, String),
+) -> dict.Dict(String, List(#(Int, Int, String, Int, String))) {
   dict.upsert(
     d,
     key,
-    fn(existing: option.Option(List(#(String, String, String)))) {
+    fn(existing: option.Option(List(#(Int, Int, String, Int, String)))) {
       case existing {
         option.Some(current_list) -> list.append(current_list, [value])
         option.None -> [value]
@@ -194,4 +326,41 @@ pub fn remove_from_list_in_dict(
       option.None -> []
     }
   })
+}
+
+pub fn find_comment(
+  xs: List(#(Int, Int, String, Int, String)),
+  b: Int,
+) -> #(Int, Int, String, Int, String) {
+  let matches =
+    list.filter(xs, fn(tuple) {
+      case tuple {
+        #(i, i2, s1, i3, s3) -> i2 == b
+      }
+    })
+
+  case matches {
+    [] -> #(0, 0, "", 0, "")
+    // default tuple if not found
+    [first, ..] -> first
+  }
+}
+
+pub fn delete_comment(
+  xs: List(#(Int, Int, String, Int, String)),
+  b: Int,
+) -> List(#(Int, Int, String, Int, String)) {
+  list.filter(xs, fn(tuple) {
+    case tuple {
+      #(i, i2, s1, i3, s3) -> i2 != b
+    }
+  })
+}
+
+pub fn update_comment_dict(
+  d: dict.Dict(String, List(#(Int, Int, String, Int, String))),
+  key: String,
+  new_list: List(#(Int, Int, String, Int, String)),
+) -> dict.Dict(String, List(#(Int, Int, String, Int, String))) {
+  dict.insert(d, key, new_list)
 }
