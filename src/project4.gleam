@@ -15,6 +15,7 @@ pub type State {
       String,
       List(#(Int, Int, String, Int, String)),
     ),
+    user_karma: dict.Dict(String, Int),
   )
 }
 
@@ -43,6 +44,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         state.subreddit_user_db,
         state.subreddit_comment_db,
+        state.user_karma,
       ))
     }
     RegisterAccount(username, password) -> {
@@ -54,6 +56,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         users_db,
         state.subreddit_user_db,
         state.subreddit_comment_db,
+        state.user_karma,
       ))
     }
     CreateSubReddit(subreddit_name) -> {
@@ -77,6 +80,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         subreddit_user_db,
         state.subreddit_comment_db,
+        state.user_karma,
       ))
     }
     JoinSubReddit(subreddit_name, username) -> {
@@ -89,6 +93,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         subreddit_db,
         state.subreddit_comment_db,
+        state.user_karma,
       ))
     }
     LeaveSubReddit(subreddit_name, username) -> {
@@ -105,6 +110,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         subreddit_db,
         state.subreddit_comment_db,
+        state.user_karma,
       ))
     }
     Post(subreddit_name, username, comment) -> {
@@ -126,6 +132,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         state.subreddit_user_db,
         subreddit_comment_db,
+        state.user_karma,
       ))
     }
     Comment(subreddit_name, username, parent_comment_id, comment) -> {
@@ -146,6 +153,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         state.subreddit_user_db,
         subreddit_comment_db,
+        state.user_karma,
       ))
     }
     UpVote(subreddit_name, post_comment_id) -> {
@@ -171,6 +179,9 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
       // echo new_comment_list
 
       let updown = updown + 1
+
+      let new_karma = update_karma_up(state.user_karma, post_username)
+
       let updated_comment = #(
         updown,
         comment_id,
@@ -188,7 +199,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
           new_comment_list,
         )
 
-      echo subreddit_comment_db
+      // echo subreddit_comment_db
 
       actor.continue(State(
         state.internal,
@@ -196,6 +207,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         state.subreddit_user_db,
         subreddit_comment_db,
+        new_karma,
       ))
     }
 
@@ -222,6 +234,9 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
       // echo new_comment_list
 
       let updown = updown - 1
+
+      let new_karma = update_karma_down(state.user_karma, post_username)
+
       let updated_comment = #(
         updown,
         comment_id,
@@ -247,6 +262,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         state.users_db,
         state.subreddit_user_db,
         subreddit_comment_db,
+        new_karma,
       ))
     }
   }
@@ -258,9 +274,17 @@ pub fn main() {
   let users_db = dict.new()
   let subreddit_user_db = dict.new()
   let subreddit_comment_db = dict.new()
+  let user_karma_db = dict.new()
 
   let assert Ok(engine_actor) =
-    actor.new(State(#(0), [], users_db, subreddit_user_db, subreddit_comment_db))
+    actor.new(State(
+      #(0),
+      [],
+      users_db,
+      subreddit_user_db,
+      subreddit_comment_db,
+      user_karma_db,
+    ))
     |> actor.on_message(handle_message)
     |> actor.start
 
@@ -274,7 +298,7 @@ pub fn main() {
 
   //Upvoting comment with id 1
   process.send(engine_handle, UpVote("Raves", 1))
-  process.send(engine_handle, UpVote("Raves", 2))
+  // process.send(engine_handle, UpVote("Raves", 2))
 
   // process.send(engine_handle, DownVote("Raves", 1))
 
@@ -363,4 +387,28 @@ pub fn update_comment_dict(
   new_list: List(#(Int, Int, String, Int, String)),
 ) -> dict.Dict(String, List(#(Int, Int, String, Int, String))) {
   dict.insert(d, key, new_list)
+}
+
+pub fn update_karma_up(
+  a: dict.Dict(String, Int),
+  b: String,
+) -> dict.Dict(String, Int) {
+  dict.upsert(a, b, fn(existing) {
+    case existing {
+      option.Some(value) -> value + 1
+      option.None -> 1
+    }
+  })
+}
+
+pub fn update_karma_down(
+  a: dict.Dict(String, Int),
+  b: String,
+) -> dict.Dict(String, Int) {
+  dict.upsert(a, b, fn(existing) {
+    case existing {
+      option.Some(value) -> value - 1
+      option.None -> -1
+    }
+  })
 }
