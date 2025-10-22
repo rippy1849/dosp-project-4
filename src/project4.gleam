@@ -19,6 +19,12 @@ pub type State {
   )
 }
 
+// pub type ClientState{
+//   ClientState(
+
+//   )
+// }
+
 pub type Message {
   Shutdown
   SetInternal(#(Int))
@@ -200,6 +206,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         )
 
       // echo subreddit_comment_db
+      // echo new_karma
 
       actor.continue(State(
         state.internal,
@@ -298,9 +305,6 @@ pub fn main() {
 
   //Upvoting comment with id 1
   process.send(engine_handle, UpVote("Raves", 1))
-  // process.send(engine_handle, UpVote("Raves", 2))
-
-  // process.send(engine_handle, DownVote("Raves", 1))
 
   process.sleep(1000)
 }
