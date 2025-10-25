@@ -2,6 +2,7 @@ import gleam/bit_array
 import gleam/crypto
 import gleam/dict
 import gleam/erlang/process
+import gleam/float
 import gleam/int
 import gleam/io
 import gleam/list
@@ -22,17 +23,14 @@ pub type State {
     ),
     user_karma: dict.Dict(String, Int),
     user_dm_db: dict.Dict(String, dict.Dict(String, List(#(String, Int, Int)))),
+    total_operations: Int,
+    start_time: timestamp.Timestamp,
   )
 }
 
-// pub type ClientState{
-//   ClientState(
-
-//   )
-// }
-
 pub type Message {
   Shutdown
+  GetStats
   SetInternal(#(Int, Int))
   RegisterAccount(String, String)
   CreateSubReddit(String)
@@ -45,36 +43,76 @@ pub type Message {
   EngineDm(String, String, String, Int)
   UserDm(String, String, String)
   DoSomething(process.Subject(Message))
-  // Push(String)
-  // PopGossip(process.Subject(Result(Int, Nil)))
+}
+
+fn calc_uptime(start_time: timestamp.Timestamp) -> Int {
+  let start_sec = timestamp.to_unix_seconds(start_time)
+  let now_sec = timestamp.to_unix_seconds(timestamp.system_time())
+  float_to_int(now_sec -. start_sec)
 }
 
 fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
+  let increment_ops = fn(s: State) -> State {
+    State(
+      s.internal,
+      s.engine_actor,
+      s.users_db,
+      s.subreddit_user_db,
+      s.subreddit_comment_db,
+      s.user_karma,
+      s.user_dm_db,
+      s.total_operations + 1,
+      s.start_time,
+    )
+  }
+
   case msg {
     Shutdown -> actor.stop()
+    GetStats -> {
+      let uptime = calc_uptime(state.start_time)
+      let ops_per_sec = case int.divide(state.total_operations, uptime) {
+        Ok(q) -> q
+        Error(_) -> 0
+      }
+      io.println("Performance Results:")
+      io.println(
+        "Total operations processed: " <> int.to_string(state.total_operations),
+      )
+      io.println("Uptime (seconds): " <> int.to_string(uptime))
+      io.println("Operations per second: " <> int.to_string(ops_per_sec))
+      actor.continue(state)
+    }
     SetInternal(#(v1, v2)) -> {
-      actor.continue(State(
-        #(v1, v2),
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          #(v1, v2),
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     RegisterAccount(username, password) -> {
       let users_db = dict.insert(state.users_db, username, password)
 
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        users_db,
-        state.subreddit_user_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          users_db,
+          state.subreddit_user_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     CreateSubReddit(subreddit_name) -> {
       let subreddit_user_db =
@@ -91,29 +129,37 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
       // echo list_check
       let is_empty = list.is_empty(list_check)
 
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        state.users_db,
-        subreddit_user_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          state.users_db,
+          subreddit_user_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     JoinSubReddit(subreddit_name, username) -> {
       let subreddit_db =
         add_to_list_in_dict(state.subreddit_user_db, subreddit_name, username)
 
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        state.users_db,
-        subreddit_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          state.users_db,
+          subreddit_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     LeaveSubReddit(subreddit_name, username) -> {
       let subreddit_db =
@@ -123,15 +169,19 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
           username,
         )
 
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        state.users_db,
-        subreddit_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          state.users_db,
+          subreddit_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     Post(subreddit_name, username, comment) -> {
       let #(current_comment_id, current_dm_id) = state.internal
@@ -146,15 +196,19 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
           comment,
         ))
 
-      actor.continue(State(
-        #(current_comment_id, current_dm_id),
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          #(current_comment_id, current_dm_id),
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     Comment(subreddit_name, username, parent_comment_id, comment) -> {
       let #(current_comment_id, current_dm_id) = state.internal
@@ -168,15 +222,19 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
           comment,
         ))
 
-      actor.continue(State(
-        #(current_comment_id, current_dm_id),
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          #(current_comment_id, current_dm_id),
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     UpVote(subreddit_name, post_comment_id) -> {
       let result = dict.get(state.subreddit_comment_db, subreddit_name)
@@ -224,15 +282,19 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
       // echo subreddit_comment_db
       // echo new_karma
 
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        subreddit_comment_db,
-        new_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          subreddit_comment_db,
+          new_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
 
     DownVote(subreddit_name, post_comment_id) -> {
@@ -280,15 +342,19 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
 
       // echo subreddit_comment_db
 
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        subreddit_comment_db,
-        new_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          subreddit_comment_db,
+          new_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     EngineDm(from_username, to_username, content, parent_comment_id) -> {
       let #(current_comment_id, current_dm_id) = state.internal
@@ -316,26 +382,34 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         )
       // echo user_dm_db
 
-      actor.continue(State(
-        #(current_comment_id, current_dm_id),
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          #(current_comment_id, current_dm_id),
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     UserDm(from_username, to_username, content) -> {
-      actor.continue(State(
-        state.internal,
-        state.engine_actor,
-        state.users_db,
-        state.subreddit_user_db,
-        state.subreddit_comment_db,
-        state.user_karma,
-        state.user_dm_db,
-      ))
+      actor.continue(
+        increment_ops(State(
+          state.internal,
+          state.engine_actor,
+          state.users_db,
+          state.subreddit_user_db,
+          state.subreddit_comment_db,
+          state.user_karma,
+          state.user_dm_db,
+          state.total_operations,
+          state.start_time,
+        )),
+      )
     }
     DoSomething(client) -> {
       let rand = int.random(4)
@@ -361,7 +435,7 @@ fn handle_message(state: State, msg: Message) -> actor.Next(State, Message) {
         _ -> Nil
       }
 
-      actor.continue(state)
+      actor.continue(increment_ops(state))
     }
   }
 }
@@ -374,6 +448,7 @@ pub fn main() {
   let subreddit_comment_db = dict.new()
   let user_karma_db = dict.new()
   let user_dm_db = dict.new()
+  let start_time = timestamp.system_time()
 
   let assert Ok(engine_actor) =
     actor.new(State(
@@ -384,6 +459,8 @@ pub fn main() {
       subreddit_comment_db,
       user_karma_db,
       user_dm_db,
+      0,
+      start_time,
     ))
     |> actor.on_message(handle_message)
     |> actor.start
@@ -416,6 +493,8 @@ pub fn main() {
           subreddit_comment_db,
           user_karma_db,
           user_dm_db,
+          0,
+          start_time,
         ))
         |> actor.on_message(handle_message)
         |> actor.start
@@ -423,9 +502,61 @@ pub fn main() {
       started.data
     })
 
-  do_something(actor_list, engine_handle)
+  // Run simulation for 10 seconds and measure
+  let sim_start_time = timestamp.system_time()
+  let duration_seconds = 10
+  run_simulation(actor_list, engine_handle, sim_start_time, duration_seconds)
+
+  // After simulation, request stats from engine
+  process.send(engine_handle, GetStats)
+
+  // Shutdown clients
+  list.each(actor_list, fn(client) { process.send(client, Shutdown) })
 
   process.sleep(1000)
+  process.send(engine_handle, Shutdown)
+}
+
+pub fn run_simulation(
+  actor_list: List(process.Subject(Message)),
+  engine_handle: process.Subject(Message),
+  start_time: timestamp.Timestamp,
+  duration_seconds: Int,
+) {
+  let current_time = timestamp.system_time()
+  let start_sec = timestamp.to_unix_seconds(start_time)
+  let current_sec = timestamp.to_unix_seconds(current_time)
+  let elapsed_seconds = float_to_int(current_sec -. start_sec)
+
+  case elapsed_seconds >= duration_seconds {
+    True -> Nil
+    False -> {
+      let now = timestamp.system_time()
+      let now_seconds_float = timestamp.to_unix_seconds(now)
+      let now_seconds = float_to_int(now_seconds_float)
+      let modulo_res = int.modulo(now_seconds, 60)
+      let now_seconds_mod = case modulo_res {
+        Ok(v) -> v
+        Error(_) -> 0
+      }
+
+      // let disconnect_random = int.random(10)
+      // echo disconnect_random
+      // process.sleep(1000)
+      // echo time
+
+      let wait = case now_seconds_mod >= 20 && now_seconds_mod <= 30 {
+        True -> 250
+        False -> 1000
+      }
+      process.sleep(wait)
+
+      list.each(actor_list, fn(actor) {
+        process.send(actor, DoSomething(engine_handle))
+      })
+      run_simulation(actor_list, engine_handle, start_time, duration_seconds)
+    }
+  }
 }
 
 /// Add a value to the list stored under a key,
@@ -555,36 +686,13 @@ pub fn add_dm(
     let updated_inner =
       dict.upsert(inner, b, fn(maybe_list) {
         case maybe_list {
-          option.Some(existing_list) -> list.append(existing_list, [#(c, e, 0)])
+          option.Some(existing_list) -> list.append(existing_list, [#(c, e, f)])
           option.None -> [#(c, e, f)]
         }
       })
 
     updated_inner
   })
-}
-
-pub fn do_something(actor_list, engine_handle) {
-  let time = timestamp.system_time()
-  let time = timestamp.to_unix_seconds(time)
-  let time = float_to_int(time)
-  let time = time % 60
-
-  // let disconnect_random = int.random(10)
-  // echo disconnect_random
-  // process.sleep(1000)
-  // echo time
-
-  let wait = case time >= 20 && time <= 30 {
-    True -> 250
-    False -> 1000
-  }
-  process.sleep(wait)
-
-  list.each(actor_list, fn(actor) {
-    process.send(actor, DoSomething(engine_handle))
-  })
-  do_something(actor_list, engine_handle)
 }
 
 @external(erlang, "erlang", "trunc")
